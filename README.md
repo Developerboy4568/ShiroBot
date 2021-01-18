@@ -1,9 +1,22 @@
-# GRAND OFFICIAL
+# SHIROBot
+A modular telegram Python bot running on python3 with an sqlalchemy database.
 
-DEPLOY HERE - [GRAND OFFICIAL](https://dashboard.heroku.com/new?button-url=https%3A%2F%2Fgithub.com%2Flegendx22%2FGRANDROBOT&template=https%3A%2F%2Fgithub.com%2Flegendx22%2FGRANDROBOT)
-[.](https://heroku.com/deploy)
-Credits - [LEGEND X](https://t.me/legendx22)
+SHERO was created for personal use by [this person](https://t.me/Developer_boy_sd_owner). Feel free to add it to your groups though!
 
-# TELEGRAM
-Check me on [TELEGRAM](https://t.me/grand50_bot)
-# TOTORIAL [OFFICIAL VIDEO](https://youtu.be/JK9cLTDZUR0)
+Can be found on telegram as [Shiro SUPPORT](https://t.me/shirobotsupport).
+
+If you want to create your own bot, you can basically follow the steps given [here](https://github.com/PaulSonOfLars/tgbot/blob/master/README.md)
+
+OR
+
+[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/developer-boy-sdowner/shiroBot.git)
+ anymore, however occasional bug fixes will be released.
+
+
+
+
+
+Credits - [M͆R͆ H͆I͆L͆L͆A͆R͆I͆O͆U͆S͆ X](https://t.me/Itz_Mr_Hillarious)
+
+
+       [LEGEND X](https://t.me/legendx22
