@@ -19,4 +19,4 @@ OR
 Credits - [M͆R͆ H͆I͆L͆L͆A͆R͆I͆O͆U͆S͆ X](https://t.me/Itz_Mr_Hillarious)
 
 
-       [LEGEND X](https://t.me/legendx22
+      - [LEGEND X](https://t.me/legendx22
