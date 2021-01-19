@@ -1,27 +1,378 @@
 import html
-import re
 import json
-from typing import List
+import random
+import time
+from datetime import datetime
+from typing import Optional, List
+from subprocess import Popen, PIPE
+import speedtest
 
 import requests
-from requests import get
-from bs4 import BeautifulSoup
-from telegram import Bot, Update, MessageEntity, ParseMode
-from telegram.error import BadRequest
+from telegram import Message, Chat, Update, Bot, MessageEntity
+from telegram import ParseMode, ReplyKeyboardRemove
 from telegram.ext import CommandHandler, run_async, Filters
-from telegram.utils.helpers import mention_html
+from telegram.utils.helpers import escape_markdown, mention_html
+from telegram.error import BadRequest, Unauthorized, TelegramError
 
-from tg_bot import dispatcher, OWNER_ID, SUDO_USERS, SUPPORT_USERS, DEV_USERS, TIGER_USERS, WHITELIST_USERS
-from tg_bot.__main__ import STATS, USER_INFO, TOKEN
+from tg_bot import dispatcher, OWNER_ID, SUDO_USERS, SUPPORT_USERS, WHITELIST_USERS, BAN_STICKER
+from tg_bot.modules.sql.blacklistusers_sql import BLACKLIST_USERS
+from tg_bot.__main__ import GDPR
+from tg_bot.__main__ import STATS, USER_INFO
 from tg_bot.modules.disable import DisableAbleCommandHandler
-from tg_bot.modules.helper_funcs.chat_status import user_admin, sudo_plus, bot_admin, can_restrict
+from tg_bot.modules.helper_funcs.chat_status import user_admin
 from tg_bot.modules.helper_funcs.extraction import extract_user
-from tg_bot.modules.sql.safemode_sql import set_safemode, is_safemoded
-import tg_bot.modules.sql.users_sql as sql
+from tg_bot.modules.helper_funcs.filters import CustomFilters
+
+RUN_STRINGS = (
+    "Where do you think you're going?",
+    "Huh? what? did they get away?",
+    "ZZzzZZzz... Huh? what? oh, just them again, nevermind.",
+    "Get back here!",
+    "Not so fast...",
+    "Look out for the wall!",
+    "Don't leave me alone with them!!",
+    "You run, you die.",
+    "Jokes on you, I'm everywhere",
+    "You're gonna regret that...",
+    "You could also try /kickme, I hear that's fun.",
+    "Go bother someone else, no-one here cares.",
+    "You can run, but you can't hide.",
+    "Is that all you've got?",
+    "I'm behind you...",
+    "You've got company!",
+    "We can do this the easy way, or the hard way.",
+    "You just don't get it, do you?",
+    "Yeah, you better run!",
+    "Please, remind me how much I care?",
+    "I'd run faster if I were you.",
+    "That's definitely the droid we're looking for.",
+    "May the odds be ever in your favour.",
+    "Famous last words.",
+    "And they disappeared forever, never to be seen again.",
+    "\"Oh, look at me! I'm so cool, I can run from a bot!\" - this person",
+    "Yeah yeah, just tap /kickme already.",
+    "Here, take this ring and head to Mordor while you're at it.",
+    "Legend has it, they're still running...",
+    "Unlike Harry Potter, your parents can't protect you from me.",
+    "Fear leads to anger. Anger leads to hate. Hate leads to suffering. If you keep running in fear, you might "
+    "be the next Vader.",
+    "Multiple calculations later, I have decided my interest in your shenanigans is exactly 0.",
+    "Legend has it, they're still running.",
+    "Keep it up, not sure we want you here anyway.",
+    "You're a wiza- Oh. Wait. You're not Harry, keep moving.",
+    "NO RUNNING IN THE HALLWAYS!",
+    "Hasta la vista, baby.",
+    "Who let the dogs out?",
+    "It's funny, because no one cares.",
+    "Ah, what a waste. I liked that one.",
+    "Frankly, my dear, I don't give a damn.",
+    "My milkshake brings all the boys to yard... So run faster!",
+    "You can't HANDLE the truth!",
+    "A long time ago, in a galaxy far far away... Someone would've cared about that. Not anymore though.",
+    "Hey, look at them! They're running from the inevitable banhammer... Cute.",
+    "Han shot first. So will I.",
+    "What are you running after, a white rabbit?",
+    "As The Doctor would say... RUN!",
+)
+
+SLAP_TEMPLATES = (
+    "{user1} {hits} {user2} with a {item}.",
+    "{user1} {hits} {user2} in the face with a {item}.",
+    "{user1} {hits} {user2} around a bit with a {item}.",
+    "{user1} {throws} a {item} at {user2}.",
+    "{user1} grabs a {item} and {throws} it at {user2}'s face.",
+    "{user1} launches a {item} in {user2}'s general direction.",
+    "{user1} starts slapping {user2} silly with a {item}.",
+    "{user1} pins {user2} down and repeatedly {hits} them with a {item}.",
+    "{user1} grabs up a {item} and {hits} {user2} with it.",
+    "{user1} ties {user2} to a chair and {throws} a {item} at them.",
+    "{user1} gave a friendly push to help {user2} learn to swim in lava."
+)
+
+ITEMS = (
+    "cast iron skillet",
+    "large trout",
+    "baseball bat",
+    "cricket bat",
+    "wooden cane",
+    "nail",
+    "printer",
+    "shovel",
+    "CRT monitor",
+    "physics textbook",
+    "toaster",
+    "portrait of Richard Stallman",
+    "television",
+    "five ton truck",
+    "roll of duct tape",
+    "book",
+    "laptop",
+    "old television",
+    "sack of rocks",
+    "rainbow trout",
+    "rubber chicken",
+    "spiked bat",
+    "fire extinguisher",
+    "heavy rock",
+    "chunk of dirt",
+    "beehive",
+    "piece of rotten meat",
+    "bear",
+    "ton of bricks",
+)
+
+THROW = (
+    "throws",
+    "flings",
+    "chucks",
+    "hurls",
+)
+
+HIT = (
+    "hits",
+    "whacks",
+    "slaps",
+    "smacks",
+    "bashes",
+)
 
 
-MARKDOWN_HELP = f"""
-Markdown is a very powerful formatting tool supported by telegram. {dispatcher.bot.first_name} has some enhancements, to make sure that \
+GMAPS_LOC = "https://maps.googleapis.com/maps/api/geocode/json"
+GMAPS_TIME = "https://maps.googleapis.com/maps/api/timezone/json"
+
+
+@run_async
+def runs(bot: Bot, update: Update):
+    update.effective_message.reply_text(random.choice(RUN_STRINGS))
+
+
+@run_async
+def slap(bot: Bot, update: Update, args: List[str]):
+    msg = update.effective_message  # type: Optional[Message]
+
+    # reply to correct message
+    reply_text = msg.reply_to_message.reply_text if msg.reply_to_message else msg.reply_text
+
+    # get user who sent message
+    if msg.from_user.username:
+        curr_user = msg.from_user.first_name.replace("<", "&lt;")
+        curr_user = curr_user.replace(">", "&gt;")
+    else:
+        curr_user = """<a href="tg://user?id={}">{}</a>""".format(msg.from_user.id, msg.from_user.first_name)
+
+    user_id = extract_user(update.effective_message, args)
+    if user_id:
+        slapped_user = bot.get_chat(user_id)
+        user1 = curr_user
+        if slapped_user.username:
+            user2 = slapped_user.first_name.replace("<", "&lt;")
+            user2 = user2.replace(">", "&gt;")
+        else:
+            user2 = """<a href="tg://user?id={}">{}</a>""".format(slapped_user.id,
+                                                   slapped_user.first_name)
+
+    # if no target found, bot targets the sender
+    else:
+        user1 = """<a href="tg://user?id={}">{}</a>""".format(bot.id, bot.first_name)
+        user2 = curr_user
+
+    temp = random.choice(SLAP_TEMPLATES)
+    item = random.choice(ITEMS)
+    hit = random.choice(HIT)
+    throw = random.choice(THROW)
+
+    repl = temp.format(user1=user1, user2=user2, item=item, hits=hit, throws=throw)
+
+    reply_text(repl, parse_mode=ParseMode.HTML)
+
+
+@run_async
+def get_bot_ip(bot: Bot, update: Update):
+    """ Sends the bot's IP address, so as to be able to ssh in if necessary.
+        OWNER ONLY.
+    """
+    res = requests.get("http://ipinfo.io/ip")
+    update.message.reply_text(res.text)
+
+
+@run_async
+def get_id(bot: Bot, update: Update, args: List[str]):
+    user_id = extract_user(update.effective_message, args)
+    if user_id:
+        if update.effective_message.reply_to_message and update.effective_message.reply_to_message.forward_from:
+            user1 = update.effective_message.reply_to_message.from_user
+            user2 = update.effective_message.reply_to_message.forward_from
+            update.effective_message.reply_text(
+                "The original sender, {}, has an ID of `{}`.\nThe forwarder, {}, has an ID of `{}`.".format(
+                    escape_markdown(user2.first_name),
+                    user2.id,
+                    escape_markdown(user1.first_name),
+                    user1.id),
+                parse_mode=ParseMode.MARKDOWN)
+        else:
+            user = bot.get_chat(user_id)
+            update.effective_message.reply_text("{}'s id is `{}`.".format(escape_markdown(user.first_name), user.id),
+                                                parse_mode=ParseMode.MARKDOWN)
+    else:
+        chat = update.effective_chat  # type: Optional[Chat]
+        if chat.type == "private":
+            update.effective_message.reply_text("Your id is `{}`.".format(chat.id),
+                                                parse_mode=ParseMode.MARKDOWN)
+
+        else:
+            update.effective_message.reply_text("This group's id is `{}`.".format(chat.id),
+                                                parse_mode=ParseMode.MARKDOWN)
+
+
+@run_async
+def info(bot: Bot, update: Update, args: List[str]):
+    msg = update.effective_message  # type: Optional[Message]
+    chat = update.effective_chat # type: Optional[Chat]
+    user_id = extract_user(update.effective_message, args)
+
+    if user_id:
+        user = bot.get_chat(user_id)
+
+    elif not msg.reply_to_message and not args:
+        user = msg.from_user
+
+    elif not msg.reply_to_message and (not args or (
+            len(args) >= 1 and not args[0].startswith("@") and not args[0].isdigit() and not msg.parse_entities(
+        [MessageEntity.TEXT_MENTION]))):
+        msg.reply_text("I can't extract a user from this.")
+        return
+
+    else:
+        return
+
+    text = "<b>User info</b>:" \
+           "\nID: <code>{}</code>" \
+           "\nFirst Name: {}".format(user.id, html.escape(user.first_name))
+
+    if user.last_name:
+        text += "\nLast Name: {}".format(html.escape(user.last_name))
+
+    if user.username:
+        text += "\nUsername: @{}".format(html.escape(user.username))
+
+    text += "\nPermanent user link: {}".format(mention_html(user.id, user.first_name))
+
+    if user.id == OWNER_ID:
+        text += "\n\nThis person is my owner."
+    else:
+        if user.id in BLACKLIST_USERS:
+            pass
+
+        elif user.id in SUDO_USERS:
+            text += "\n\nThis person is one of my sudo users."
+                   
+        else:
+            if user.id in SUPPORT_USERS:
+                text += "\n\nThis person is one of my support users." \
+                        
+
+            if user.id in WHITELIST_USERS:
+                text += "\n\nThis person has been whitelisted! " \
+                        "That means I'm not allowed to ban/kick them."
+
+    for mod in USER_INFO:
+        try:
+            mod_info = mod.__user_info__(user.id).strip()
+        except TypeError:
+            mod_info = mod.__user_info__(user.id, chat.id).strip()
+        if mod_info:
+            text += "\n\n" + mod_info
+
+    update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+@run_async
+def get_time(bot: Bot, update: Update, args: List[str]):
+    location = " ".join(args)
+    if location.lower() == bot.first_name.lower():
+        update.effective_message.reply_text("Its always banhammer time for me!")
+        bot.send_sticker(update.effective_chat.id, BAN_STICKER)
+        return
+
+    res = requests.get(GMAPS_LOC, params=dict(address=location))
+
+    if res.status_code == 200:
+        loc = json.loads(res.text)
+        if loc.get('status') == 'OK':
+            lat = loc['results'][0]['geometry']['location']['lat']
+            long = loc['results'][0]['geometry']['location']['lng']
+
+            country = None
+            city = None
+
+            address_parts = loc['results'][0]['address_components']
+            for part in address_parts:
+                if 'country' in part['types']:
+                    country = part.get('long_name')
+                if 'administrative_area_level_1' in part['types'] and not city:
+                    city = part.get('long_name')
+                if 'locality' in part['types']:
+                    city = part.get('long_name')
+
+            if city and country:
+                location = "{}, {}".format(city, country)
+            elif country:
+                location = country
+
+            timenow = int(datetime.utcnow().timestamp())
+            res = requests.get(GMAPS_TIME, params=dict(location="{},{}".format(lat, long), timestamp=timenow))
+            if res.status_code == 200:
+                offset = json.loads(res.text)['dstOffset']
+                timestamp = json.loads(res.text)['rawOffset']
+                time_there = datetime.fromtimestamp(timenow + timestamp + offset).strftime("%H:%M:%S on %A %d %B")
+                update.message.reply_text("It's {} in {}".format(time_there, location))
+
+
+@run_async
+@user_admin
+def echo(bot: Bot, update: Update):
+    args = update.effective_message.text.split(None, 1)
+    message = update.effective_message
+    if message.reply_to_message:
+        message.reply_to_message.reply_text(args[1])
+    else:
+        message.reply_text(args[1], quote=False)
+    message.delete()
+
+
+@run_async
+def gdpr(bot: Bot, update: Update):
+    update.effective_message.reply_text("Deleting identifiable data...")
+    for mod in GDPR:
+        mod.__gdpr__(update.effective_user.id)
+
+    update.effective_message.reply_text("Your personal data has been deleted.\n\nNote that this will not unban "
+                                        "you from any chats, as that is telegram data, not bot data. "
+                                        "Flooding, warns, and gbans are also preserved, as of "
+                                        "[this](https://ico.org.uk/for-organisations/guide-to-the-general-data-protection-regulation-gdpr/individual-rights/right-to-erasure/), "
+                                        "which clearly states that the right to erasure does not apply "
+                                        "\"for the performance of a task carried out in the public interest\", as is "
+                                        "the case for the aforementioned pieces of data.",
+                                        parse_mode=ParseMode.MARKDOWN)
+
+
+def shell(command):
+    process = Popen(command,stdout=PIPE,shell=True,stderr=PIPE)
+    stdout,stderr = process.communicate()
+    return (stdout,stderr)
+
+def ram(bot: Bot, update: Update):
+    cmd = "ps -o pid"
+    output = shell(cmd)[0].decode()
+    processes = output.splitlines()
+    mem = 0
+    for p in processes[1:]:
+        mem += int(float(shell("ps u -p {} | awk ".format(p)+"'{sum=sum+$6}; END {print sum/1024}'")[0].decode().rstrip().replace("'","")))
+    update.message.reply_text(f"RAM usage = <code>{mem} MiB</code>", parse_mode=ParseMode.HTML)
+
+
+MARKDOWN_HELP = """
+Markdown is a very powerful formatting tool supported by telegram. {} has some enhancements, to make sure that \
 saved messages are correctly parsed, and to allow you to create buttons.
 
 - <code>_italic_</code>: wrapping text with '_' will produce italic text
@@ -42,154 +393,7 @@ If you want multiple buttons on the same line, use :same, as such:
 This will create two buttons on a single line, instead of one button per line.
 
 Keep in mind that your message <b>MUST</b> contain some text other than just a button!
-"""
-
-
-@run_async
-def get_id(bot: Bot, update: Update, args: List[str]):
-    message = update.effective_message
-    chat = update.effective_chat
-    msg = update.effective_message
-    user_id = extract_user(msg, args)
-
-    if user_id:
-
-        if msg.reply_to_message and msg.reply_to_message.forward_from:
-
-            user1 = message.reply_to_message.from_user
-            user2 = message.reply_to_message.forward_from
-
-            msg.reply_text(f"The original sender, {html.escape(user2.first_name)},"
-                           f" has an ID of <code>{user2.id}</code>.\n"
-                           f"The forwarder, {html.escape(user1.first_name)},"
-                           f" has an ID of <code>{user1.id}</code>.",
-                           parse_mode=ParseMode.HTML)
-
-        else:
-
-            user = bot.get_chat(user_id)
-            msg.reply_text(f"{html.escape(user.first_name)}'s id is <code>{user.id}</code>.",
-                           parse_mode=ParseMode.HTML)
-
-    else:
-
-        if chat.type == "private":
-            msg.reply_text(f"Your id is <code>{chat.id}</code>.",
-                           parse_mode=ParseMode.HTML)
-
-        else:
-            msg.reply_text(f"This group's id is <code>{chat.id}</code>.",
-                           parse_mode=ParseMode.HTML)
-
-
-@run_async
-def gifid(bot: Bot, update: Update):
-    msg = update.effective_message
-    if msg.reply_to_message and msg.reply_to_message.animation:
-        update.effective_message.reply_text(f"Gif ID:\n<code>{msg.reply_to_message.animation.file_id}</code>",
-                                            parse_mode=ParseMode.HTML)
-    else:
-        update.effective_message.reply_text("Please reply to a gif to get its ID.")
-
-
-@run_async
-def info(bot: Bot, update: Update, args: List[str]):
-    message = update.effective_message
-    chat = update.effective_chat
-    user_id = extract_user(update.effective_message, args)
-
-    if user_id:
-        user = bot.get_chat(user_id)
-
-    elif not message.reply_to_message and not args:
-        user = message.from_user
-
-    elif not message.reply_to_message and (not args or (
-            len(args) >= 1 and not args[0].startswith("@") and not args[0].isdigit() and not message.parse_entities(
-        [MessageEntity.TEXT_MENTION]))):
-        message.reply_text("I can't extract a user from this.")
-        return
-
-    else:
-        return
-
-    text = (f"<b>user information:</b>\n"
-            f"🆔️ID: <code>{user.id}</code>\n"
-            f"👤First Name: {html.escape(user.first_name)}")
-
-    if user.last_name:
-        text += f"\n👤Last Name: {html.escape(user.last_name)}"
-
-    if user.username:
-        text += f"\n👤Username: @{html.escape(user.username)}"
-
-    text += f"\n👤Permanent user link: {mention_html(user.id, 'link')}"
-
-    num_chats = sql.get_user_num_chats(user.id)
-    text += f"\n🌍Chat count: <code>{num_chats}</code>"
-
-    try:
-        user_member = chat.get_member(user.id)
-        if user_member.status == 'administrator':
-            result = requests.post(f"https://api.telegram.org/bot{TOKEN}/getChatMember?chat_id={chat.id}&user_id={user.id}")
-            result = result.json()["result"]
-            if "custom_title" in result.keys():
-                custom_title = result['custom_title']
-                text += f"\nThis user holds the title <b>{custom_title}</b> here."
-    except BadRequest:
-        pass
-
-    disaster_level_present = False
-
-    if user.id == OWNER_ID:
-        text += "\n😎The Disaster level of this person is 'LEGEND'."
-        disaster_level_present = True
-    elif user.id in DEV_USERS:
-        text += "\n🔥This member is one of 'Hero Association'."
-        disaster_level_present = True
-    elif user.id in SUDO_USERS:
-        text += "\n🔥The Disaster level of this person is 'Dragon'."
-        disaster_level_present = True
-    elif user.id in SUPPORT_USERS:
-        text += "\n🔥The Disaster level of this person is 'HACKER'."
-        disaster_level_present = True
-    elif user.id in TIGER_USERS:
-        text += "\n🔥The Disaster level of this person is 'Tiger'."
-        disaster_level_present = True
-    elif user.id in WHITELIST_USERS:
-        text += "\n🔥The Disaster level of this person is 'Wolf'."
-        disaster_level_present = True
-
-    if disaster_level_present:
-        text += ' [<a href="http://t.me/{}?start=disasters">?</a>]'.format(bot.username)
-
-    text += "\n"
-    for mod in USER_INFO:
-        if mod.__mod_name__ == "Users":
-            continue
-
-        try:
-            mod_info = mod.__user_info__(user.id)
-        except TypeError:
-            mod_info = mod.__user_info__(user.id, chat.id)
-        if mod_info:
-            text += "\n" + mod_info
-
-    update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-
-
-@run_async
-@user_admin
-def echo(bot: Bot, update: Update):
-    args = update.effective_message.text.split(None, 1)
-    message = update.effective_message
-
-    if message.reply_to_message:
-        message.reply_to_message.reply_text(args[1])
-    else:
-        message.reply_text(args[1], quote=False)
-
-    message.delete()
+""".format(dispatcher.bot.first_name)
 
 
 @run_async
@@ -202,272 +406,152 @@ def markdown_help(bot: Bot, update: Update):
 
 
 @run_async
-@sudo_plus
 def stats(bot: Bot, update: Update):
-    stats = "Current stats:\n" + "\n".join([mod.__stats__() for mod in STATS])
-    result = re.sub(r'(\d+)', r'<code>\1</code>', stats)
-    update.effective_message.reply_text(result, parse_mode=ParseMode.HTML)
+    update.effective_message.reply_text("Current stats:\n" + "\n".join([mod.__stats__() for mod in STATS]))
 
-
-@bot_admin
-@can_restrict
-@user_admin
-def safe_mode(bot: Bot, update: Update, args: List[str]):
-    chat = update.effective_chat
-    message = update.effective_message
-    if not args:
-        message.reply_text("This chat has its Safe Mode set to *{}*".format(is_safemoded(chat.id).safemode_status), parse_mode=ParseMode.MARKDOWN)
-        return
-
-    if str(args[0]).lower() in ["on", "yes"]:
-        set_safemode(chat.id, True)
-        message.reply_text("Safe Mode has been set to *{}*".format(is_safemoded(chat.id).safemode_status), parse_mode=ParseMode.MARKDOWN)
-        return
-
-    elif str(args[0]).lower() in ["off", "no"]:
-        set_safemode(chat.id, False)
-        message.reply_text("Safe Mode has been set to *{}*".format(is_safemoded(chat.id).safemode_status), parse_mode=ParseMode.MARKDOWN)
-        return
-    else:
-        message.reply_text("I only recognize the arguments `{}`, `{}`, `{}` or `{}`".format("Yes", "No", "On", "Off"), parse_mode=ParseMode.MARKDOWN)
 
 @run_async
-def magisk(bot, update):
-    url = 'https://raw.githubusercontent.com/topjohnwu/magisk_files/'
-    releases = ""
-    for type, branch in {"Stable":["master/stable","master"], "Beta":["master/beta","master"], "Canary (release)":["canary/release","canary"], "Canary (debug)":["canary/debug","canary"]}.items():
-        data = get(url + branch[0] + '.json').json()
-        releases += f'*{type}*: \n' \
-                    f'• [Changelog](https://github.com/topjohnwu/magisk_files/blob/{branch[1]}/notes.md)\n' \
-                    f'• Zip - [{data["magisk"]["version"]}-{data["magisk"]["versionCode"]}]({data["magisk"]["link"]}) \n' \
-                    f'• App - [{data["app"]["version"]}-{data["app"]["versionCode"]}]({data["app"]["link"]}) \n' \
-                    f'• Uninstaller - [{data["magisk"]["version"]}-{data["magisk"]["versionCode"]}]({data["uninstaller"]["link"]})\n\n'
-                        
+def ping(bot: Bot, update: Update):
+    msg = update.effective_message
+    start_time = time.time()
+    message = msg.reply_text("Pinging...")
+    end_time = time.time()
+    ping_time = round((end_time - start_time)*1000, 3)
+    message.edit_text("*Pong!!!*\n`{}ms`".format(ping_time), parse_mode=ParseMode.MARKDOWN)
 
-    del_msg = update.message.reply_text("*Latest Magisk Releases:*\n{}".format(releases),
-                               parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-    time.sleep(300)
+
+@run_async
+def sudo_list(bot: Bot, update: Update):
+    reply = "<b>Sudo Users:</b>\n"
+    for sudo in SUDO_USERS:
+        user_id = int(sudo) # Ensure int
+        user = bot.get_chat(user_id)
+        first_name = html.escape(user.first_name)
+        reply += """• <a href="tg://user?id={}">{}</a>\n""".format(user_id, first_name)
+    update.effective_message.reply_text(reply, parse_mode=ParseMode.HTML)
+
+
+@run_async
+def support_list(bot: Bot, update: Update):
+    reply = "<b>Support Users:</b>\n"
+    for support in SUPPORT_USERS:
+        user_id = int(support) # Ensure int
+        user = bot.get_chat(user_id)
+        first_name = html.escape(user.first_name)
+        reply += """• <a href="tg://user?id={}">{}</a>\n""".format(user_id, first_name)
+    update.effective_message.reply_text(reply, parse_mode=ParseMode.HTML)
+
+
+def convert(speed):
+	return round(int(speed)/1048576, 2) # bits to megabits
+
+@run_async	
+def speed_test(bot: Bot, update: Update):
+	test = speedtest.Speedtest()
+	test.get_best_server()
+	test.download()
+	test.upload()
+	result = test.results.dict()
+	
+	reply = "*Speedtest Results:*\n"
+	reply += f"Download: `{convert(result['download'])} Mb/s`\n"
+	reply += f"Upload: `{convert(result['upload'])} Mb/s`\n"
+	reply += f"Ping: `{result['ping']}`\n"
+	reply += f"ISP: `{result['client']['isp']}`"
+	update.effective_message.reply_text(reply, parse_mode=ParseMode.MARKDOWN)
+
+
+@run_async
+def remove_keyboard(bot: Bot, update: Update):
+    chat = update.effective_chat.id
+    text = "Removing keyboards..."
+    msg = bot.send_message(chat, text, reply_markup=ReplyKeyboardRemove(selective=False))
+    msg.delete()
+    bot.send_message(chat, "Done!")
+
+
+@run_async
+def leave_chat(bot: Bot, update: Update, args):
     try:
-        del_msg.delete()
-        update.effective_message.delete()
-    except BadRequest as err:
-        if (err.message == "Message to delete not found" ) or (err.message == "Message can't be deleted" ):
-            return
-
-@run_async
-def checkfw(bot, update, args):
-    if not len(args) == 2:
-        reply = f'Give me something to fetch, like:\n`/checkfw SM-N975F DBT`'
-        del_msg = update.effective_message.reply_text("{}".format(reply),
-                               parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        time.sleep(5)
+        chat_id = args[0]
+    except IndexError:
+        chat_id = None
+    msg = update.effective_message
+    if not chat_id:
+        msg.reply_text("Which chat should I leave?")
+        return
+    try:
+        chat = bot.get_chat(chat_id)
+    except BadRequest:
+        msg.reply_text("Give me a valid ID!")
+        return
+    reason = " ".join(args[1:])
+    if reason:
         try:
-            del_msg.delete()
-            update.effective_message.delete()
-        except BadRequest as err:
-            if (err.message == "Message to delete not found" ) or (err.message == "Message can't be deleted" ):
-                return
-    temp,csc = args
-    model = f'sm-'+temp if not temp.upper().startswith('SM-') else temp
-    fota = get(f'http://fota-cloud-dn.ospserver.net/firmware/{csc.upper()}/{model.upper()}/version.xml')
-    test = get(f'http://fota-cloud-dn.ospserver.net/firmware/{csc.upper()}/{model.upper()}/version.test.xml')
-    if test.status_code != 200:
-        reply = f"Couldn't check for {temp.upper()} and {csc.upper()}, please refine your search or try again later!"
-        del_msg = update.effective_message.reply_text("{}".format(reply),
-                               parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        time.sleep(5)
-        try:
-            del_msg.delete()
-            update.effective_message.delete()
-        except BadRequest as err:
-            if (err.message == "Message to delete not found" ) or (err.message == "Message can't be deleted" ):
-                return
-    page1 = BeautifulSoup(fota.content, 'lxml')
-    page2 = BeautifulSoup(test.content, 'lxml')
-    os1 = page1.find("latest").get("o")
-    os2 = page2.find("latest").get("o")
-    if page1.find("latest").text.strip():
-        pda1,csc1,phone1=page1.find("latest").text.strip().split('/')
-        reply = f'*Latest released firmware for {model.upper()} and {csc.upper()} is:*\n'
-        reply += f'• PDA: `{pda1}`\n• CSC: `{csc1}`\n'
-        if phone1:
-            reply += f'• Phone: `{phone1}`\n'
-        if os1:
-            reply += f'• Android: `{os1}`\n'
-        reply += f'\n'
-    else:
-        reply = f'*No public release found for {model.upper()} and {csc.upper()}.*\n\n'
-    reply += f'*Latest test firmware for {model.upper()} and {csc.upper()} is:*\n'
-    if len(page2.find("latest").text.strip().split('/')) == 3:
-        pda2,csc2,phone2=page2.find("latest").text.strip().split('/')
-        reply += f'• PDA: `{pda2}`\n• CSC: `{csc2}`\n'
-        if phone2:
-            reply += f'• Phone: `{phone2}`\n'
-        if os2:
-            reply += f'• Android: `{os2}`\n'
-        reply += f'\n'
-    else:
-        md5=page2.find("latest").text.strip()
-        reply += f'• Hash: `{md5}`\n• Android: `{os2}`\n\n'
-    
-    update.message.reply_text("{}".format(reply),
-                           parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-
-@run_async
-def getfw(bot, update, args):
-    if not len(args) == 2:
-        reply = f'Give me something to fetch, like:\n`/getfw SM-N975F DBT`'
-        del_msg = update.effective_message.reply_text("{}".format(reply),
-                               parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        time.sleep(5)
-        try:
-            del_msg.delete()
-            update.effective_message.delete()
-        except BadRequest as err:
-            if (err.message == "Message to delete not found" ) or (err.message == "Message can't be deleted" ):
-                return
-    temp,csc = args
-    model = f'sm-'+temp if not temp.upper().startswith('SM-') else temp
-    test = get(f'http://fota-cloud-dn.ospserver.net/firmware/{csc.upper()}/{model.upper()}/version.test.xml')
-    if test.status_code != 200:
-        reply = f"Couldn't find any firmware downloads for {temp.upper()} and {csc.upper()}, please refine your search or try again later!"
-        del_msg = update.effective_message.reply_text("{}".format(reply),
-                               parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        time.sleep(5)
-        try:
-            del_msg.delete()
-            update.effective_message.delete()
-        except BadRequest as err:
-            if (err.message == "Message to delete not found" ) or (err.message == "Message can't be deleted" ):
-                return
-    url1 = f'https://samfrew.com/model/{model.upper()}/region/{csc.upper()}/'
-    url2 = f'https://www.sammobile.com/samsung/firmware/{model.upper()}/{csc.upper()}/'
-    url3 = f'https://sfirmware.com/samsung-{model.lower()}/#tab=firmwares'
-    url4 = f'https://samfw.com/firmware/{model.upper()}/{csc.upper()}/'
-    fota = get(f'http://fota-cloud-dn.ospserver.net/firmware/{csc.upper()}/{model.upper()}/version.xml')
-    page = BeautifulSoup(fota.content, 'lxml')
-    os = page.find("latest").get("o")
-    reply = ""
-    if page.find("latest").text.strip():
-        pda,csc2,phone=page.find("latest").text.strip().split('/')
-        reply += f'*Latest firmware for {model.upper()} and {csc.upper()} is:*\n'
-        reply += f'• PDA: `{pda}`\n• CSC: `{csc2}`\n'
-        if phone:
-            reply += f'• Phone: `{phone}`\n'
-        if os:
-            reply += f'• Android: `{os}`\n'
-    reply += f'\n'
-    reply += f'*Downloads for {model.upper()} and {csc.upper()}*\n'
-    reply += f'• [samfrew.com]({url1})\n'
-    reply += f'• [sammobile.com]({url2})\n'
-    reply += f'• [sfirmware.com]({url3})\n'
-    reply += f'• [samfw.com]({url4})\n'
-    update.message.reply_text("{}".format(reply),
-                           parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-
-@run_async
-def twrp(bot, update, args):
-    if len(args) == 0:
-        reply='No codename provided, write a codename for fetching informations.'
-        del_msg = update.effective_message.reply_text("{}".format(reply),
-                               parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        time.sleep(5)
-        try:
-            del_msg.delete()
-            update.effective_message.delete()
-        except BadRequest as err:
-            if (err.message == "Message to delete not found" ) or (err.message == "Message can't be deleted" ):
-                return
-
-    device = " ".join(args)
-    url = get(f'https://eu.dl.twrp.me/{device}/')
-    if url.status_code == 404:
-        reply = f"Couldn't find twrp downloads for {device}!\n"
-        del_msg = update.effective_message.reply_text("{}".format(reply),
-                               parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        time.sleep(5)
-        try:
-            del_msg.delete()
-            update.effective_message.delete()
-        except BadRequest as err:
-            if (err.message == "Message to delete not found" ) or (err.message == "Message can't be deleted" ):
-                return
-    else:
-        reply = f'*Latest Official TWRP for {device}*\n'            
-        db = get(DEVICES_DATA).json()
-        newdevice = device.strip('lte') if device.startswith('beyond') else device
-        try:
-            brand = db[newdevice][0]['brand']
-            name = db[newdevice][0]['name']
-            reply += f'*{brand} - {name}*\n'
-        except KeyError as err:
+            chat.send_message(
+                f"I'm outta here!\nReason: <code>{reason}</code>",
+                parse_mode="HTML"
+            )
+        except BadRequest:
             pass
-        page = BeautifulSoup(url.content, 'lxml')
-        date = page.find("em").text.strip()
-        reply += f'*Updated:* {date}\n'
-        trs = page.find('table').find_all('tr')
-        row = 2 if trs[0].find('a').text.endswith('tar') else 1
-        for i in range(row):
-            download = trs[i].find('a')
-            dl_link = f"https://eu.dl.twrp.me{download['href']}"
-            dl_file = download.text
-            size = trs[i].find("span", {"class": "filesize"}).text
-            reply += f'[{dl_file}]({dl_link}) - {size}\n'
+        except Unauthorized:
+            pass
+    try:
+        chat.leave()
+    except TelegramError as e:
+        msg.reply_text(f"Couldn't leave chat:\n{e}") 
+    
 
-        update.message.reply_text("{}".format(reply),
-                               parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-
-
-
+# /ip is for private use
 __help__ = """
+ - /ping: pings the bot.
  - /id: get the current group id. If used by replying to a message, gets that user's id.
-
- - /gifid: reply to a gif to me to tell you its file ID.
-
+ - /runs: reply a random string from an array of replies.
+ - /slap: slap a user, or get slapped if not a reply.
  - /info: get information about a user.
+ - /gdpr: deletes your information from the bot's database. Private chats only.
 
  - /markdownhelp: quick summary of how markdown works in telegram - can only be called in private chats.
-
- - /safemode <on/off/yes/no>: Disallows new users to send media for 24 hours after joining a group.
-    Use unmute to unrestrict them.
-
- - /magisk - gets the latest magisk release for Stable/Beta/Canary
-
- - /twrp <codename> -  gets latest twrp for the android device using the codename
-
- - /checkfw <model> <csc> - Samsung only - shows the latest firmware info for the given device, taken from samsung servers
-
- - /getfw <model> <csc> - Samsung only - gets firmware download links from samfrew, sammobile and sfirmwares for the given device
-
- - /imdb <movie or TV series name>: View IMDb results for selected movie or TV series 
 """
 
-ID_HANDLER = DisableAbleCommandHandler("id", get_id, pass_args=True)
-GIFID_HANDLER = DisableAbleCommandHandler("gifid", gifid)
-INFO_HANDLER = DisableAbleCommandHandler("info", info, pass_args=True)
-ECHO_HANDLER = DisableAbleCommandHandler("echo", echo, filters=Filters.group)
-MD_HELP_HANDLER = CommandHandler("markdownhelp", markdown_help, filters=Filters.private)
-STATS_HANDLER = CommandHandler("stats", stats)
-MAGISK_HANDLER = DisableAbleCommandHandler("magisk", magisk)
-TWRP_HANDLER = DisableAbleCommandHandler("twrp", twrp, pass_args=True)
-GETFW_HANDLER = DisableAbleCommandHandler("getfw", getfw, pass_args=True)
-CHECKFW_HANDLER = DisableAbleCommandHandler("checkfw", checkfw, pass_args=True)
+__mod_name__ = "Misc"
 
-SAFEMODE_HANDLER = CommandHandler("safemode", safe_mode, pass_args=True)
+ID_HANDLER = DisableAbleCommandHandler("id", get_id, pass_args=True)
+IP_HANDLER = CommandHandler("ip", get_bot_ip, filters=Filters.chat(OWNER_ID))
+
+TIME_HANDLER = CommandHandler("time", get_time, pass_args=True)
+
+RUNS_HANDLER = DisableAbleCommandHandler("runs", runs)
+SLAP_HANDLER = DisableAbleCommandHandler("slap", slap, pass_args=True)
+INFO_HANDLER = DisableAbleCommandHandler("info", info, pass_args=True)
+
+ECHO_HANDLER = DisableAbleCommandHandler("echo", echo, filters=Filters.group)
+RAM_HANDLER = CommandHandler("ram", ram, filters=CustomFilters.sudo_filter)
+MD_HELP_HANDLER = CommandHandler("markdownhelp", markdown_help, filters=Filters.private)
+
+STATS_HANDLER = CommandHandler("stats", stats, filters=CustomFilters.sudo_filter)
+GDPR_HANDLER = CommandHandler("gdpr", gdpr, filters=Filters.private)
+PING_HANDLER = DisableAbleCommandHandler("ping", ping)
+SUDO_LIST_HANDLER = CommandHandler("sudolist", sudo_list, filters=CustomFilters.sudo_filter | CustomFilters.support_filter)
+SUPPORT_LIST_HANDLER = CommandHandler("supportlist", support_list, filters=CustomFilters.sudo_filter | CustomFilters.support_filter)
+SPEEDTEST_HANDLER = CommandHandler("speed", speed_test, filters=CustomFilters.sudo_filter)
+REMOVE_KB_HANDLER = CommandHandler(["clearkeys", "nokeyboard"], remove_keyboard, filters=Filters.group)
+LEAVE_CHAT_HANDLER = CommandHandler(["leave", "yeet"], leave_chat, filters=Filters.user(OWNER_ID), pass_args=True)
 
 dispatcher.add_handler(ID_HANDLER)
-dispatcher.add_handler(GIFID_HANDLER)
+dispatcher.add_handler(IP_HANDLER)
+# dispatcher.add_handler(TIME_HANDLER)
+dispatcher.add_handler(RUNS_HANDLER)
+dispatcher.add_handler(SLAP_HANDLER)
 dispatcher.add_handler(INFO_HANDLER)
 dispatcher.add_handler(ECHO_HANDLER)
 dispatcher.add_handler(MD_HELP_HANDLER)
 dispatcher.add_handler(STATS_HANDLER)
-dispatcher.add_handler(SAFEMODE_HANDLER)
-dispatcher.add_handler(MAGISK_HANDLER)
-dispatcher.add_handler(TWRP_HANDLER)
-dispatcher.add_handler(GETFW_HANDLER)
-dispatcher.add_handler(CHECKFW_HANDLER)
-
-
-__mod_name__ = "MASTER MOD"
-__command_list__ = ["id", "info", "echo"]
-__handlers__ = [ID_HANDLER, GIFID_HANDLER, INFO_HANDLER, ECHO_HANDLER, MD_HELP_HANDLER, STATS_HANDLER, SAFEMODE_HANDLER, MAGISK_HANDLER, TWRP_HANDLER, GETFW_HANDLER, CHECKFW_HANDLER]
+dispatcher.add_handler(RAM_HANDLER)
+dispatcher.add_handler(GDPR_HANDLER)
+dispatcher.add_handler(PING_HANDLER)
+dispatcher.add_handler(SUDO_LIST_HANDLER)
+dispatcher.add_handler(SUPPORT_LIST_HANDLER)
+dispatcher.add_handler(SPEEDTEST_HANDLER)
+dispatcher.add_handler(REMOVE_KB_HANDLER)
+dispatcher.add_handler(LEAVE_CHAT_HANDLER)

@@ -5,14 +5,14 @@ from typing import Optional, List
 from telegram import MAX_MESSAGE_LENGTH, ParseMode, InlineKeyboardMarkup
 from telegram import Message, Update, Bot
 from telegram.error import BadRequest
-from telegram.ext import CommandHandler, RegexHandler
+from telegram.ext import CommandHandler, MessageHandler, Filters
 from telegram.ext.dispatcher import run_async
 from telegram.utils.helpers import escape_markdown
 
 import tg_bot.modules.sql.notes_sql as sql
 from tg_bot import dispatcher, MESSAGE_DUMP, LOGGER
 from tg_bot.modules.disable import DisableAbleCommandHandler
-from tg_bot.modules.helper_funcs.chat_status import user_admin
+from tg_bot.modules.helper_funcs.chat_status import user_admin, connection_status
 from tg_bot.modules.helper_funcs.misc import build_keyboard, revert_buttons
 from tg_bot.modules.helper_funcs.msg_types import get_note_type
 
@@ -100,16 +100,17 @@ def get(bot, update, notename, show_none=True, no_format=False):
                                        "the meantime, I'll remove it from your notes list.")
                     sql.rm_note(chat_id, notename)
                 else:
-                    message.reply_text("This note could not be sent, as it is incorrectly formatted. Ask in "
-                                       "@OnePunchSupport if you can't figure out why!")
+                    message.reply_text("This note could not be sent, as it is incorrectly formatted.")
+                                       
                     LOGGER.exception("Could not parse message #%s in chat %s", notename, str(chat_id))
                     LOGGER.warning("Message was: %s", str(note.value))
         return
     elif show_none:
-        message.reply_text("This note doesn't exist")
+        message.reply_text("This note doesn't exist.")
 
 
 @run_async
+@connection_status
 def cmd_get(bot: Bot, update: Update, args: List[str]):
     if len(args) >= 2 and args[1].lower() == "noformat":
         get(bot, update, args[0], show_none=True, no_format=True)
@@ -120,6 +121,7 @@ def cmd_get(bot: Bot, update: Update, args: List[str]):
 
 
 @run_async
+@connection_status
 def hash_get(bot: Bot, update: Update):
     message = update.effective_message.text
     fst_word = message.split()[0]
@@ -129,6 +131,7 @@ def hash_get(bot: Bot, update: Update):
 
 @run_async
 @user_admin
+@connection_status
 def save(bot: Bot, update: Update):
     chat_id = update.effective_chat.id
     msg = update.effective_message  # type: Optional[Message]
@@ -139,9 +142,11 @@ def save(bot: Bot, update: Update):
         msg.reply_text("Dude, there's no note")
         return
 
+        
     sql.add_note_to_db(chat_id, note_name, text, data_type, buttons=buttons, file=content)
 
-    msg.reply_text(f"Yas! Added {note_name}.\nGet it with /get {note_name}, or #{note_name}")
+    msg.reply_text(
+        "Yas! Added {note_name}.\nGet it with /get {note_name}, or #{note_name}".format(note_name=note_name))
 
     if msg.reply_to_message and msg.reply_to_message.from_user.is_bot:
         if text:
@@ -159,6 +164,7 @@ def save(bot: Bot, update: Update):
 
 @run_async
 @user_admin
+@connection_status
 def clear(bot: Bot, update: Update, args: List[str]):
     chat_id = update.effective_chat.id
     if len(args) >= 1:
@@ -171,13 +177,14 @@ def clear(bot: Bot, update: Update, args: List[str]):
 
 
 @run_async
+@connection_status
 def list_notes(bot: Bot, update: Update):
     chat_id = update.effective_chat.id
     note_list = sql.get_all_chat_notes(chat_id)
 
     msg = "*Notes in chat:*\n"
     for note in note_list:
-        note_name = escape_markdown(f" - {note.name}\n")
+        note_name = " - `{}`\n".format(escape_markdown(note.name))
         if len(msg) + len(note_name) > MAX_MESSAGE_LENGTH:
             update.effective_message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
             msg = ""
@@ -213,7 +220,7 @@ def __import_data__(chat_id, data):
 
 
 def __stats__():
-    return f"{sql.num_notes()} notes, across {sql.num_chats()} chats."
+    return "{} notes, across {} chats.".format(sql.num_notes(), sql.num_chats())
 
 
 def __migrate__(old_chat_id, new_chat_id):
@@ -222,7 +229,7 @@ def __migrate__(old_chat_id, new_chat_id):
 
 def __chat_settings__(chat_id, user_id):
     notes = sql.get_all_chat_notes(chat_id)
-    return f"There are `{len(notes)}` notes in this chat."
+    return "There are `{}` notes in this chat.".format(len(notes))
 
 
 __help__ = """
@@ -241,10 +248,10 @@ A button can be added to a note by using standard markdown link syntax - the lin
  - /clear <notename>: clear note with this name
 """
 
-__mod_name__ = "NOTES"
+__mod_name__ = "Notes"
 
 GET_HANDLER = CommandHandler("get", cmd_get, pass_args=True)
-HASH_GET_HANDLER = RegexHandler(r"^#[^\s]+", hash_get)
+HASH_GET_HANDLER = MessageHandler(Filters.regex(r"^#[^\s]+"), hash_get)
 
 SAVE_HANDLER = CommandHandler("save", save)
 DELETE_HANDLER = CommandHandler("clear", clear, pass_args=True)
