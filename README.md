@@ -9,7 +9,7 @@ If you want to create your own bot, you can basically follow the steps given [he
 
 OR
 
-[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/developer-boy-sdowner/shiroBot.git)
+[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/Developerboy4568/ShiroBot.git)
  anymore, however occasional bug fixes will be released.
 
 
